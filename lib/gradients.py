@@ -9,7 +9,7 @@ class VanillaGrad(object):
 
     def __init__(self, pretrained_model, cuda=False):
         self.pretrained_model = pretrained_model
-        self.features = pretrained_model.features
+        self.features = pretrained_model.children()
         self.cuda = cuda
         #self.pretrained_model.eval()
 
@@ -27,7 +27,7 @@ class VanillaGrad(object):
             one_hot = Variable(torch.from_numpy(one_hot), requires_grad=True)
         one_hot = torch.sum(one_hot * output)
 
-        one_hot.backward(retain_variables=True)
+        one_hot.backward(retain_graph=True)
 
         grad = x.grad.data.cpu().numpy()
         grad = grad[0, :, :, :]
@@ -76,7 +76,7 @@ class SmoothGrad(VanillaGrad):
 
             if x_plus_noise.grad is not None:
                 x_plus_noise.grad.data.zero_()
-            one_hot.backward(retain_variables=True)
+            one_hot.backward(retain_graph=True)
 
             grad = x_plus_noise.grad.data.cpu().numpy()
 
@@ -129,8 +129,8 @@ class GuidedBackpropGrad(VanillaGrad):
 
     def __init__(self, pretrained_model, cuda=False):
         super(GuidedBackpropGrad, self).__init__(pretrained_model, cuda)
-        for idx, module in self.features._modules.items():
-            if module.__class__.__name__ is 'ReLU':
+        for idx, module in enumerate(self.features):
+            if module.__class__.__name__.lower() is 'relu':
                 self.features._modules[idx] = GuidedBackpropReLU()
 
 
@@ -139,18 +139,19 @@ class GuidedBackpropSmoothGrad(SmoothGrad):
     def __init__(self, pretrained_model, cuda=False, stdev_spread=.15, n_samples=25, magnitude=True):
         super(GuidedBackpropSmoothGrad, self).__init__(
             pretrained_model, cuda, stdev_spread, n_samples, magnitude)
-        for idx, module in self.features._modules.items():
-            if module.__class__.__name__ is 'ReLU':
-                self.features._modules[idx] = GuidedBackpropReLU()
+        for idx, module in enumerate(self.features):
+            if module.__class__.__name__.lower() is '':
+                self.features[idx] = GuidedBackpropReLU()
 
 
 class FeatureExtractor(object):
 
     def __init__(self, model, target_layers):
         self.model = model
-        self.features = model.features
+        self.features = model.named_children()
         self.target_layers = target_layers
         self.gradients = []
+        self.outputs = []
 
     def __call__(self, x):
         target_activations, output = self.extract_features(x)
@@ -165,24 +166,24 @@ class FeatureExtractor(object):
         self.gradients.append(grad)
 
     def extract_features(self, x):
-        outputs = []
-        for name, module in self.features._modules.items():
-            x = module(x)
+        for name, module in self.features:
             if name in self.target_layers:
-                x.register_hook(self.save_gradient)
-                outputs += [x]
-        return outputs, x
+                module.register_hook(self.save_gradient)
+                module.register_forward_hook(lambda layer, _, output: self.outputs.append(output))
+        x = self.model(x)
+        return self.outputs, x
 
 
 class GradCam(object):
 
-    def __init__(self, pretrained_model, target_layer_names, cuda):
+    def __init__(self, pretrained_model, target_layer_names, img_size, cuda):
         self.pretrained_model = pretrained_model
         self.cuda = cuda
         if self.cuda:
             self.pretrained_model.cuda()
         self.pretrained_model.eval()
         self.extractor = FeatureExtractor(self.pretrained_model, target_layer_names)
+        self.img_size = img_size
 
     def __call__(self, x, index=None):
         features, output = self.extractor(x)
@@ -210,7 +211,7 @@ class GradCam(object):
             cam += w * target[i, :, :]
 
         cam = np.maximum(cam, 0)
-        cam = cv2.resize(cam, (224, 224))
+        cam = cv2.resize(cam, (self.img_size, self.img_size))
         cam = cam - np.min(cam)
         cam = cam / np.max(cam)
 

@@ -22,6 +22,8 @@ def parse_args():
                         help='Use NVIDIA GPU acceleration')
     parser.add_argument('--img', type=str, default='',
                         help='Input image path')
+    parser.add_argument('--img_size', type=int, default=224,
+                        help='Input image size')
     parser.add_argument('--out_dir', type=str, default='./result/grad/',
                         help='Result directory path')
     parser.add_argument('--n_samples', type=int, default=10,
@@ -56,7 +58,7 @@ def main():
         img = cv2.imread(args.img, 1)
     else:
         img = misc.face()
-    img = np.float32(cv2.resize(img, (224, 224))) / 255
+    img = np.float32(cv2.resize(img, (args.img_size, args.img_size))) / 255
     preprocessed_img = preprocess_image(img, args.cuda)
 
     model = vgg19(pretrained=True)
